@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>ロケット角度計測</title>
+<style>
+  :root{
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --accent:#3ddc84; --accent2:#ffd23d; --danger:#ff5a5a; --bg:#0b0f14;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;background:var(--bg);color:#fff;
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Segoe UI",sans-serif;
+    overflow:hidden; overscroll-behavior:none;}
+  button{font-family:inherit;}
+  .hidden{display:none !important;}
+
+  /* ===== 起動画面 ===== */
+  #start{position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:22px;padding:28px;
+    background:radial-gradient(120% 90% at 50% 0%, #16324a 0%, #0b0f14 70%);text-align:center;}
+  #start h1{font-size:24px;margin:0;font-weight:700;}
+  #start p{margin:0;max-width:420px;line-height:1.7;color:#c8d3de;font-size:14px;}
+  #startBtn{margin-top:8px;width:190px;height:190px;border-radius:50%;border:none;
+    background:linear-gradient(160deg,var(--accent),#1f9d5f);color:#04110a;font-size:30px;font-weight:800;
+    box-shadow:0 12px 40px rgba(61,220,132,.35);cursor:pointer;}
+  #startBtn:active{transform:scale(.97);}
+  #startErr{color:var(--danger);font-size:13px;min-height:18px;max-width:420px;line-height:1.6;}
+  .badge{font-size:12px;color:#8aa;border:1px solid #29404f;border-radius:20px;padding:5px 12px;}
+
+  /* ===== カメラ / 計測画面 ===== */
+  #app{position:fixed;inset:0;z-index:10;}
+  #video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000;}
+  /* クロスヘア */
+  #reticle{position:absolute;inset:0;pointer-events:none;z-index:11;}
+  #reticle .ln{position:absolute;background:rgba(61,220,132,.9);box-shadow:0 0 4px rgba(0,0,0,.8);}
+  #reticle .h{left:50%;top:50%;width:200px;height:2px;transform:translate(-50%,-50%);}
+  #reticle .v{left:50%;top:50%;width:2px;height:200px;transform:translate(-50%,-50%);}
+  #reticle .gap{position:absolute;left:50%;top:50%;width:26px;height:26px;
+    border:2px solid var(--accent2);border-radius:50%;transform:translate(-50%,-50%);
+    box-shadow:0 0 6px rgba(0,0,0,.8);}
+  #reticle .dot{position:absolute;left:50%;top:50%;width:4px;height:4px;border-radius:50%;
+    background:var(--accent2);transform:translate(-50%,-50%);}
+
+  /* 上部HUD */
+  #hud{position:absolute;left:0;right:0;top:0;z-index:12;
+    padding:calc(var(--safe-t) + 8px) 10px 8px;
+    background:linear-gradient(#000c 0%, #0009 60%, #0000 100%);}
+  .row{display:flex;gap:8px;}
+  .card{flex:1;background:#0d151dcc;border:1px solid #23384a;border-radius:12px;padding:8px 10px;}
+  .card .lbl{font-size:10px;color:#8fa6b8;letter-spacing:.04em;}
+  .card .val{font-size:22px;font-weight:800;line-height:1.15;font-variant-numeric:tabular-nums;}
+  .card .sub{font-size:10px;color:#9fb2c2;}
+  .card.big .val{font-size:26px;color:var(--accent2);}
+  .warn{color:var(--danger)!important;}
+  .ok{color:var(--accent)!important;}
+
+  /* 下部コントロール */
+  #controls{position:absolute;left:0;right:0;bottom:0;z-index:12;
+    padding:10px 12px calc(var(--safe-b) + 12px);
+    background:linear-gradient(#0000 0%, #0009 40%, #000d 100%);
+    display:flex;flex-direction:column;gap:10px;}
+  .toolbar{display:flex;gap:8px;align-items:center;}
+  .toolbar label{font-size:12px;color:#b9c7d4;white-space:nowrap;}
+  .field{background:#0d151d;border:1px solid #2a4459;border-radius:10px;color:#fff;
+    padding:9px 10px;font-size:15px;min-width:0;}
+  #label{width:66px;text-align:center;font-weight:700;}
+  #azOffset{width:76px;text-align:center;}
+  #zoomWrap{flex:1;display:flex;align-items:center;gap:8px;}
+  #zoom{flex:1;}
+  .btns{display:flex;gap:10px;}
+  .btn{flex:1;height:60px;border:none;border-radius:14px;font-size:18px;font-weight:800;color:#04110a;
+    background:#26424f;color:#dfe;cursor:pointer;}
+  .btn:active{transform:scale(.98);}
+  .btn.primary{background:linear-gradient(160deg,var(--accent),#1f9d5f);color:#04110a;}
+  .btn.stop{background:linear-gradient(160deg,#ff8a3d,#e5533d);color:#210b04;}
+  .btn.ghost{background:#182530;color:#cdd;border:1px solid #2a4459;}
+  .btn:disabled{opacity:.4;}
+  .recording{animation:pulse 1s infinite;}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 #ff5a5a88}50%{box-shadow:0 0 0 8px #ff5a5a00}}
+
+  #toast{position:absolute;left:50%;bottom:calc(var(--safe-b) + 150px);transform:translateX(-50%);
+    z-index:20;background:#0d151def;border:1px solid #2a4459;border-radius:10px;padding:9px 16px;
+    font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;}
+  #toast.show{opacity:1;}
+
+  /* 結果モーダル */
+  .modal{position:fixed;inset:0;z-index:30;background:#000b;display:flex;align-items:flex-end;
+    justify-content:center;padding:0;}
+  .sheet{width:100%;max-width:560px;background:#0d151d;border-top:1px solid #2a4459;
+    border-radius:18px 18px 0 0;padding:18px 16px calc(var(--safe-b) + 16px);max-height:88vh;overflow:auto;}
+  .sheet h2{margin:2px 0 12px;font-size:18px;}
+  .kv{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid #1c2c39;}
+  .kv .k{color:#9fb2c2;font-size:13px;}
+  .kv .v{font-weight:700;font-variant-numeric:tabular-nums;text-align:right;}
+  .kv .v.hl{color:var(--accent2);font-size:18px;}
+  .sheet .btns{margin-top:14px;}
+  .sheet .btn{height:52px;font-size:16px;}
+  .mini{font-size:12px;color:#8fa6b8;line-height:1.6;margin:10px 2px 0;}
+
+  /* 履歴 */
+  #histList{margin-top:8px;}
+  .hitem{background:#0f1922;border:1px solid #22384a;border-radius:10px;padding:8px 10px;margin-bottom:8px;
+    font-size:12px;display:flex;justify-content:space-between;gap:10px;align-items:center;}
+  .hitem .hl{font-variant-numeric:tabular-nums;line-height:1.5;}
+  .hitem .del{background:none;border:none;color:var(--danger);font-size:18px;cursor:pointer;padding:4px 8px;}
+  .tag{display:inline-block;background:#1f9d5f;color:#04110a;font-weight:800;border-radius:6px;
+    padding:1px 7px;margin-right:6px;}
+</style>
+</head>
+<body>
+
+<!-- ===== 起動画面 ===== -->
+<div id="start">
+  <span class="badge">モデルロケット 角度計測（計測専用）</span>
+  <h1>🚀 ロケット角度トラッカー</h1>
+  <p>カメラの中央十字にロケットを合わせ続け、最高点に達したときの<br>
+     <b>仰角・方位角・GPS位置</b>を記録します。3点以上で観測すれば別途 三角測量で高度が出せます。</p>
+  <p style="font-size:12px;color:#8aa">「開始」を押すと カメラ / モーションセンサ / 位置情報 の許可を求めます。</p>
+  <button id="startBtn">開始</button>
+  <div id="startErr"></div>
+</div>
+
+<!-- ===== 計測画面 ===== -->
+<div id="app" class="hidden">
+  <video id="video" playsinline muted autoplay></video>
+
+  <div id="reticle">
+    <div class="ln h"></div><div class="ln v"></div>
+    <div class="gap"></div><div class="dot"></div>
+  </div>
+
+  <div id="hud">
+    <div class="row">
+      <div class="card big"><div class="lbl">最大仰角</div><div class="val" id="hMaxEl">--</div>
+        <div class="sub" id="hMaxAz">方位 --</div></div>
+      <div class="card"><div class="lbl">現在 仰角</div><div class="val" id="hEl">--</div>
+        <div class="sub" id="hElState">待機中</div></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div class="card"><div class="lbl">方位角</div><div class="val" id="hAz">--</div>
+        <div class="sub" id="hAzAcc">精度 --</div></div>
+      <div class="card"><div class="lbl">GPS</div><div class="val" id="hGps" style="font-size:14px">取得中…</div>
+        <div class="sub" id="hGpsAcc">精度 --</div></div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <div id="controls">
+    <div class="toolbar">
+      <label>観測点</label>
+      <input id="label" class="field" value="A" maxlength="4">
+      <label>方位補正°</label>
+      <input id="azOffset" class="field" type="number" value="0" step="0.5" inputmode="decimal">
+      <div id="zoomWrap" class="hidden"><label>🔍</label><input id="zoom" type="range"></div>
+    </div>
+    <div class="btns">
+      <button id="btnStart" class="btn primary">計測開始</button>
+      <button id="btnStop" class="btn stop" disabled>計測終了</button>
+      <button id="btnHist" class="btn ghost" style="flex:0 0 64px">履歴</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 結果シート ===== -->
+<div id="resultModal" class="modal hidden">
+  <div class="sheet">
+    <h2>📍 計測結果</h2>
+    <div class="kv"><span class="k">観測点</span><span class="v" id="rLabel">-</span></div>
+    <div class="kv"><span class="k">仰角 (最高点)</span><span class="v hl" id="rEl">-</span></div>
+    <div class="kv"><span class="k">方位角</span><span class="v hl" id="rAz">-</span></div>
+    <div class="kv"><span class="k">緯度・経度</span><span class="v" id="rLatLon">-</span></div>
+    <div class="kv"><span class="k">GPS精度 / コンパス精度</span><span class="v" id="rAcc">-</span></div>
+    <div class="kv"><span class="k">時刻</span><span class="v" id="rTime">-</span></div>
+    <div class="btns">
+      <button id="btnCopy" class="btn primary">コピー</button>
+      <button id="btnShare" class="btn ghost">共有</button>
+      <button id="btnCloseResult" class="btn">閉じる</button>
+    </div>
+    <p class="mini">履歴に自動保存しました。JSON/CSV は「コピー」または 履歴→エクスポートで取り出せます。</p>
+  </div>
+</div>
+
+<!-- ===== 履歴シート ===== -->
+<div id="histModal" class="modal hidden">
+  <div class="sheet">
+    <h2>🗂 計測履歴</h2>
+    <div id="histEmpty" class="mini">まだ記録がありません。</div>
+    <div id="histList"></div>
+    <div class="btns">
+      <button id="btnExpCsv" class="btn primary">CSV書出</button>
+      <button id="btnExpJson" class="btn ghost">JSON書出</button>
+      <button id="btnClearHist" class="btn" style="flex:0 0 92px;color:#ff9">全消去</button>
+    </div>
+    <div class="btns" style="margin-top:10px">
+      <button id="btnCloseHist" class="btn ghost">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =========================================================================
+   ロケット角度計測ツール  —  計測専用（高度計算は行わない）
+   ・仰角     : 端末の向きに依存しない  asin(-cos(beta)*cos(gamma))
+   ・方位角   : ENU回転行列でカメラ軸(-Z)の水平方位を求め、iOSは
+                webkitCompassHeading(真北・傾き補正済) を基準に絶対化
+   ・GPS      : geolocation.watchPosition (高精度)
+   ========================================================================= */
+
+const $ = id => document.getElementById(id);
+const clamp = (x,a,b)=>Math.max(a,Math.min(b,x));
+const norm360 = d => ((d%360)+360)%360;
+const D2R = Math.PI/180, R2D = 180/Math.PI;
+
+const POINTS16 = ['北','北北東','北東','東北東','東','東南東','南東','南南東',
+                  '南','南南西','南西','西南西','西','西北西','北西','北北西'];
+const compassName = az => POINTS16[Math.round(norm360(az)/22.5)%16];
+
+/* ---------- センサ状態 ---------- */
+const S = {
+  elevation:null, azimuth:null, azSource:null, compassAcc:null,
+  gps:null,                        // {lat,lon,acc,alt}
+  measuring:false,
+  maxEl:-Infinity, maxAz:null, maxTime:null,
+  emaEl:null, emaAzX:null, emaAzY:null,     // 平滑化用
+};
+const EMA = 0.25;
+
+/* =========================================================================
+   角度計算：alpha/beta/gamma(度) と webkitCompassHeading(度) から
+   仰角・方位角(真北基準・時計回り) を算出
+   ========================================================================= */
+function computeAngles(alphaDeg, betaDeg, gammaDeg, compassHeadingDeg, isAbsolute){
+  if(betaDeg==null || gammaDeg==null) return null;
+  const a=(alphaDeg||0)*D2R, b=betaDeg*D2R, g=gammaDeg*D2R;
+  const cA=Math.cos(a),sA=Math.sin(a),cB=Math.cos(b),sB=Math.sin(b),cG=Math.cos(g),sG=Math.sin(g);
+
+  // カメラ軸 = デバイス -Z 軸。world=(East,North,Up)
+  const up   = -cB*cG;                     // Up成分
+  const elevation = Math.asin(clamp(up,-1,1))*R2D;
+  const E_cam = -(cA*sG + cG*sA*sB);       // East成分
+  const N_cam = -(sA*sG - cA*cG*sB);       // North成分
+  const relAzCam = Math.atan2(E_cam, N_cam);
+
+  let azimuth=null, azSource=null;
+  if(typeof compassHeadingDeg === 'number' && !isNaN(compassHeadingDeg)){
+    // iOS: 端末上端(+Y)軸の相対方位と webkitCompassHeading の差でオフセット
+    const E_top=-cB*sA, N_top=cB*cA;
+    const relAzTop=Math.atan2(E_top, N_top);
+    const offset = compassHeadingDeg*D2R - relAzTop;
+    azimuth = norm360((relAzCam + offset)*R2D);
+    azSource='iOSコンパス';
+  }else if(isAbsolute){
+    azimuth = norm360(relAzCam*R2D);
+    azSource='絶対方位';
+  }
+  return {elevation, azimuth, azSource};
+}
+
+/* ---------- 端末の向きイベント ---------- */
+function onOrientation(e){
+  const compass = (typeof e.webkitCompassHeading === 'number') ? e.webkitCompassHeading : null;
+  if(typeof e.webkitCompassAccuracy === 'number' && e.webkitCompassAccuracy >= 0)
+    S.compassAcc = e.webkitCompassAccuracy;
+  const r = computeAngles(e.alpha, e.beta, e.gamma, compass, e.absolute===true);
+  if(!r) return;
+
+  // 仰角 EMA
+  S.emaEl = (S.emaEl==null) ? r.elevation : S.emaEl + EMA*(r.elevation - S.emaEl);
+  S.elevation = S.emaEl;
+
+  // 方位角 EMA（円環：sin/cos を平滑化）
+  if(r.azimuth!=null){
+    const ax=Math.cos(r.azimuth*D2R), ay=Math.sin(r.azimuth*D2R);
+    S.emaAzX = (S.emaAzX==null)? ax : S.emaAzX + EMA*(ax-S.emaAzX);
+    S.emaAzY = (S.emaAzY==null)? ay : S.emaAzY + EMA*(ay-S.emaAzY);
+    S.azimuth = norm360(Math.atan2(S.emaAzY, S.emaAzX)*R2D);
+    S.azSource = r.azSource;
+  }
+
+  // 最大仰角ラッチ（＝最高点）
+  if(S.measuring && S.elevation > S.maxEl){
+    S.maxEl = S.elevation;
+    S.maxAz = S.azimuth;
+    S.maxTime = new Date();
+  }
+}
+
+/* ---------- GPS ---------- */
+function startGeo(){
+  if(!navigator.geolocation){ $('hGps').textContent='非対応'; return; }
+  navigator.geolocation.watchPosition(p=>{
+    S.gps = { lat:p.coords.latitude, lon:p.coords.longitude,
+              acc:p.coords.accuracy, alt:p.coords.altitude };
+  }, err=>{
+    $('hGps').textContent='許可なし';
+    $('hGps').classList.add('warn');
+  }, { enableHighAccuracy:true, maximumAge:1000, timeout:15000 });
+}
+
+/* ---------- 描画ループ ---------- */
+function azOffsetVal(){ const v=parseFloat($('azOffset').value); return isNaN(v)?0:v; }
+function adjAz(az){ return az==null?null:norm360(az+azOffsetVal()); }
+
+function fmt(n,d=1){ return (n==null||isNaN(n))?'--':n.toFixed(d); }
+
+function render(){
+  // 現在仰角
+  $('hEl').textContent = (S.elevation==null?'--':fmt(S.elevation)+'°');
+  // 方位角（補正込み）
+  const az = adjAz(S.azimuth);
+  if(az==null){
+    $('hAz').textContent='取得不可'; $('hAz').classList.add('warn');
+    $('hAzAcc').textContent='この端末/ブラウザでは方位を取得できません';
+  }else{
+    $('hAz').classList.remove('warn');
+    $('hAz').textContent = fmt(az)+'° '+compassName(az);
+    $('hAzAcc').textContent = (S.azSource||'') +
+      (S.compassAcc!=null ? ' / 精度±'+Math.round(S.compassAcc)+'°' : '');
+    if(S.compassAcc!=null){
+      const bad=S.compassAcc>25||S.compassAcc<0;
+      $('hAzAcc').classList.toggle('warn',bad);
+    }
+  }
+  // GPS
+  if(S.gps){
+    $('hGps').classList.remove('warn');
+    $('hGps').textContent = S.gps.lat.toFixed(5)+', '+S.gps.lon.toFixed(5);
+    $('hGpsAcc').textContent = '精度±'+ (S.gps.acc!=null?Math.round(S.gps.acc):'?') +'m';
+    $('hGpsAcc').classList.toggle('warn', S.gps.acc!=null && S.gps.acc>25);
+  }
+  // 最大仰角＆その方位
+  if(S.maxEl>-Infinity){
+    $('hMaxEl').textContent = fmt(S.maxEl)+'°';
+    const maz=adjAz(S.maxAz);
+    $('hMaxAz').textContent = '方位 '+(maz==null?'--':fmt(maz)+'° '+compassName(maz));
+  }else{
+    $('hMaxEl').textContent='--'; $('hMaxAz').textContent='方位 --';
+  }
+  $('hElState').textContent = S.measuring ? '計測中●' : '待機中';
+  $('hElState').classList.toggle('ok', S.measuring);
+  requestAnimationFrame(render);
+}
+
+/* =========================================================================
+   起動：許可要求 → カメラ・センサ・GPS開始
+   ========================================================================= */
+$('startBtn').addEventListener('click', async ()=>{
+  $('startErr').textContent='';
+  if(!window.isSecureContext){
+    $('startErr').textContent='HTTPS(またはlocalhost)でないと カメラ/センサ を利用できません。';
+    return;
+  }
+  try{
+    // 1) モーションセンサ許可 (iOS 13+)
+    if(typeof DeviceOrientationEvent!=='undefined' &&
+       typeof DeviceOrientationEvent.requestPermission==='function'){
+      const st = await DeviceOrientationEvent.requestPermission();
+      if(st!=='granted') throw new Error('モーションセンサの許可が必要です。');
+    }
+    window.addEventListener('deviceorientation', onOrientation, true);
+    // 絶対方位イベント（Android等）
+    if('ondeviceorientationabsolute' in window){
+      window.addEventListener('deviceorientationabsolute', onOrientation, true);
+    }
+
+    // 2) カメラ
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:{ideal:'environment'} }, audio:false });
+    const v=$('video'); v.srcObject=stream; await v.play().catch(()=>{});
+    setupZoom(stream);
+
+    // 3) GPS
+    startGeo();
+
+    $('start').classList.add('hidden');
+    $('app').classList.remove('hidden');
+    requestAnimationFrame(render);
+  }catch(err){
+    $('startErr').textContent = 'エラー: ' + (err && err.message ? err.message : err) +
+      '\n設定でカメラ/位置情報/モーションを許可し、再読込してください。';
+  }
+});
+
+/* ---------- デジタルズーム（対応端末のみ） ---------- */
+function setupZoom(stream){
+  const track = stream.getVideoTracks()[0];
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  if(caps && caps.zoom){
+    const z=$('zoom');
+    z.min=caps.zoom.min; z.max=caps.zoom.max; z.step=caps.zoom.step||0.1;
+    z.value=track.getSettings().zoom || caps.zoom.min;
+    z.oninput=()=>track.applyConstraints({advanced:[{zoom:parseFloat(z.value)}]}).catch(()=>{});
+    $('zoomWrap').classList.remove('hidden');
+  }
+}
+
+/* =========================================================================
+   計測開始 / 終了
+   ========================================================================= */
+$('btnStart').addEventListener('click', ()=>{
+  S.measuring=true; S.maxEl=-Infinity; S.maxAz=null; S.maxTime=null;
+  $('btnStart').disabled=true; $('btnStop').disabled=false;
+  $('btnStop').classList.add('recording');
+  toast('計測開始 — 十字にロケットを合わせ続けてください');
+});
+
+$('btnStop').addEventListener('click', ()=>{
+  S.measuring=false;
+  $('btnStart').disabled=false; $('btnStop').disabled=true;
+  $('btnStop').classList.remove('recording');
+  if(S.maxEl===-Infinity){ toast('データがありません'); return; }
+  showResult(buildRecord());
+});
+
+function buildRecord(){
+  const az = adjAz(S.maxAz);
+  return {
+    label: ($('label').value||'').trim() || '?',
+    lat: S.gps? +S.gps.lat.toFixed(6) : null,
+    lon: S.gps? +S.gps.lon.toFixed(6) : null,
+    gpsAccuracy_m: S.gps&&S.gps.acc!=null? +S.gps.acc.toFixed(1) : null,
+    elevation_deg: +S.maxEl.toFixed(2),
+    azimuth_deg: az==null? null : +az.toFixed(2),
+    compassAccuracy_deg: S.compassAcc!=null? +S.compassAcc.toFixed(1) : null,
+    timestamp: (S.maxTime||new Date()).toISOString(),
+  };
+}
+
+/* ---------- 結果表示 ---------- */
+let lastRecord=null;
+function showResult(rec){
+  lastRecord=rec;
+  $('rLabel').textContent = rec.label;
+  $('rEl').textContent = rec.elevation_deg.toFixed(2)+'°';
+  $('rAz').textContent = rec.azimuth_deg==null? '取得不可'
+        : rec.azimuth_deg.toFixed(2)+'° '+compassName(rec.azimuth_deg);
+  $('rLatLon').textContent = rec.lat==null? '取得不可' : rec.lat+', '+rec.lon;
+  $('rAcc').textContent = (rec.gpsAccuracy_m==null?'?':'±'+rec.gpsAccuracy_m+'m') + ' / ' +
+                          (rec.compassAccuracy_deg==null?'?':'±'+rec.compassAccuracy_deg+'°');
+  $('rTime').textContent = new Date(rec.timestamp).toLocaleString('ja-JP');
+  saveRecord(rec);
+  $('resultModal').classList.remove('hidden');
+}
+$('btnCloseResult').onclick = ()=> $('resultModal').classList.add('hidden');
+
+/* ---------- コピー / 共有 ---------- */
+function recordText(rec){
+  const json = JSON.stringify(rec);
+  const csv = CSV_HEADER + '\n' + toCsvRow(rec);
+  return 'JSON:\n'+json+'\n\nCSV:\n'+csv;
+}
+$('btnCopy').onclick = async ()=>{
+  try{ await navigator.clipboard.writeText(recordText(lastRecord)); toast('コピーしました'); }
+  catch(_){ toast('コピー失敗（手動で選択してください）'); }
+};
+$('btnShare').onclick = async ()=>{
+  if(navigator.share){
+    try{ await navigator.share({title:'ロケット角度計測 '+lastRecord.label, text:recordText(lastRecord)}); }
+    catch(_){}
+  }else toast('この端末は共有に非対応');
+};
+
+/* =========================================================================
+   履歴（localStorage）
+   ========================================================================= */
+const LS_KEY='rocketTrackerRecords';
+const CSV_HEADER='label,lat,lon,gpsAccuracy_m,elevation_deg,azimuth_deg,compassAccuracy_deg,timestamp';
+function toCsvRow(r){
+  return [r.label,r.lat,r.lon,r.gpsAccuracy_m,r.elevation_deg,r.azimuth_deg,r.compassAccuracy_deg,r.timestamp]
+    .map(v=>v==null?'':v).join(',');
+}
+function loadRecords(){ try{return JSON.parse(localStorage.getItem(LS_KEY))||[];}catch(_){return [];} }
+function saveRecord(rec){ const a=loadRecords(); a.push(rec); localStorage.setItem(LS_KEY,JSON.stringify(a)); }
+function setRecords(a){ localStorage.setItem(LS_KEY,JSON.stringify(a)); }
+
+$('btnHist').onclick = ()=>{ renderHist(); $('histModal').classList.remove('hidden'); };
+$('btnCloseHist').onclick = ()=> $('histModal').classList.add('hidden');
+
+function renderHist(){
+  const a=loadRecords(); const list=$('histList'); list.innerHTML='';
+  $('histEmpty').style.display = a.length? 'none':'block';
+  a.slice().reverse().forEach((r,i)=>{
+    const idx=a.length-1-i;
+    const div=document.createElement('div'); div.className='hitem';
+    const az = r.azimuth_deg==null?'--':r.azimuth_deg.toFixed(1)+'°';
+    div.innerHTML = `<div class="hl"><span class="tag">${r.label}</span>`+
+      `仰角 <b>${r.elevation_deg.toFixed(1)}°</b> / 方位 <b>${az}</b><br>`+
+      `<span style="color:#8fa6b8">${r.lat==null?'GPS無':r.lat+', '+r.lon} · `+
+      `${new Date(r.timestamp).toLocaleTimeString('ja-JP')}</span></div>`;
+    const del=document.createElement('button'); del.className='del'; del.textContent='🗑';
+    del.onclick=()=>{ const arr=loadRecords(); arr.splice(idx,1); setRecords(arr); renderHist(); };
+    div.appendChild(del); list.appendChild(div);
+  });
+}
+$('btnClearHist').onclick = ()=>{
+  if(confirm('履歴を全て削除しますか？')){ setRecords([]); renderHist(); }
+};
+$('btnExpCsv').onclick = ()=>{
+  const a=loadRecords(); if(!a.length){toast('履歴が空です');return;}
+  download('rocket_'+stamp()+'.csv', CSV_HEADER+'\n'+a.map(toCsvRow).join('\n'), 'text/csv');
+};
+$('btnExpJson').onclick = ()=>{
+  const a=loadRecords(); if(!a.length){toast('履歴が空です');return;}
+  download('rocket_'+stamp()+'.json', JSON.stringify(a,null,2), 'application/json');
+};
+function stamp(){ return new Date().toISOString().replace(/[:.]/g,'-').slice(0,19); }
+function download(name, text, mime){
+  const blob=new Blob([text],{type:mime});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+}
+
+/* ---------- トースト ---------- */
+let toastT=null;
+function toast(msg){
+  const t=$('toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2200);
+}
+
+/* デバッグ用フック（デスクトップ検証で角度を注入） */
+window.__inject = (alpha,beta,gamma,compass)=> onOrientation({alpha,beta,gamma,webkitCompassHeading:compass,absolute:compass==null});
+</script>
+</body>
+</html>
