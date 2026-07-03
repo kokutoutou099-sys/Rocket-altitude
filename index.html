@@ -251,53 +251,71 @@ const S = {
   gps:null, measuring:false,
   maxEl:-Infinity, maxAz:null, maxTime:null,
   emaEl:null, emaAzX:null, emaAzY:null,
+  northOffset:null, sawCompass:false,            // 北合わせ(端末ヨー基準→真北)
   samples:[], lastSampleT:0, sampleStart:null,   // 時系列
 };
-const EMA = 0.25;
+const EMA_EL=0.15, EMA_AZ=0.20, EMA_OFF=0.12;    // 仰角/方位/北合わせ の平滑
 const SAMPLE_MS = 45;         // ~22Hz
 const SAMPLE_CAP = 8000;      // 暴走防止
 
-/* ---------- 角度計算（検証済み） ---------- */
-function computeAngles(alphaDeg, betaDeg, gammaDeg, compassHeadingDeg, isAbsolute){
+// 円環角のEMA（度）
+function emaAngle(prev,val,k){
+  if(prev==null) return val;
+  const px=Math.cos(prev*D2R),py=Math.sin(prev*D2R),vx=Math.cos(val*D2R),vy=Math.sin(val*D2R);
+  return norm360(Math.atan2(py+k*(vy-py), px+k*(vx-px))*R2D);
+}
+
+/* ---------- 角度計算：仰角＋カメラ軸の相対方位（連続・反転しない量）---------- */
+function computeAngles(alphaDeg, betaDeg, gammaDeg){
   if(betaDeg==null || gammaDeg==null) return null;
   const a=(alphaDeg||0)*D2R, b=betaDeg*D2R, g=gammaDeg*D2R;
   const cA=Math.cos(a),sA=Math.sin(a),cB=Math.cos(b),sB=Math.sin(b),cG=Math.cos(g),sG=Math.sin(g);
   const up=-cB*cG;
   const elevation=Math.asin(clamp(up,-1,1))*R2D;
-  const E_cam=-(cA*sG + cG*sA*sB);
+  const E_cam=-(cA*sG + cG*sA*sB);          // カメラ軸(-Z)の水平成分
   const N_cam=-(sA*sG - cA*cG*sB);
-  const relAzCam=Math.atan2(E_cam, N_cam);
-  let azimuth=null, azSource=null;
-  if(typeof compassHeadingDeg==='number' && !isNaN(compassHeadingDeg)){
-    const E_top=-cB*sA, N_top=cB*cA;
-    const relAzTop=Math.atan2(E_top, N_top);
-    const offset=compassHeadingDeg*D2R - relAzTop;
-    azimuth=norm360((relAzCam+offset)*R2D); azSource='iOSコンパス';
-  }else if(isAbsolute){
-    azimuth=norm360(relAzCam*R2D); azSource='絶対方位';
-  }
-  return {elevation, azimuth, azSource};
+  const relAzCam=norm360(Math.atan2(E_cam, N_cam)*R2D);
+  const camMag=Math.hypot(E_cam, N_cam);    // 小さいほど天頂近く=方位が不定
+  return {elevation, relAzCam, camMag, cB};
 }
 
-/* ---------- 端末の向き ---------- */
+/* ---------- 端末の向き（方位反転の根治：安定時のみ北合わせを取り込み凍結）---------- */
 function onOrientation(e){
-  const compass=(typeof e.webkitCompassHeading==='number')?e.webkitCompassHeading:null;
-  if(typeof e.webkitCompassAccuracy==='number' && e.webkitCompassAccuracy>=0) S.compassAcc=e.webkitCompassAccuracy;
-  const r=computeAngles(e.alpha,e.beta,e.gamma,compass,e.absolute===true);
+  const compass=(typeof e.webkitCompassHeading==='number' && !isNaN(e.webkitCompassHeading))?e.webkitCompassHeading:null;
+  if(typeof e.webkitCompassAccuracy==='number') S.compassAcc=e.webkitCompassAccuracy;
+  const r=computeAngles(e.alpha,e.beta,e.gamma);
   if(!r) return;
-  S.emaEl=(S.emaEl==null)?r.elevation:S.emaEl+EMA*(r.elevation-S.emaEl);
+
+  // 仰角 EMA（弱め）
+  S.emaEl=(S.emaEl==null)?r.elevation:S.emaEl+EMA_EL*(r.elevation-S.emaEl);
   S.elevation=S.emaEl;
-  if(r.azimuth!=null){
-    const ax=Math.cos(r.azimuth*D2R), ay=Math.sin(r.azimuth*D2R);
-    S.emaAzX=(S.emaAzX==null)?ax:S.emaAzX+EMA*(ax-S.emaAzX);
-    S.emaAzY=(S.emaAzY==null)?ay:S.emaAzY+EMA*(ay-S.emaAzY);
-    S.azimuth=norm360(Math.atan2(S.emaAzY,S.emaAzX)*R2D);
-    S.azSource=r.azSource;
+
+  // --- 北合わせ offset の決定 ---
+  const accOk=(S.compassAcc==null)||(S.compassAcc>=0 && S.compassAcc<30);
+  if(compass!=null){
+    S.sawCompass=true; S.azSource='iOSコンパス';
+    const cand=norm360(compass - r.relAzCam);
+    // 端末が十分フラット(cosβ>0.5)＝上端とカメラの水平向きが一致し、規約に依らず安定な時だけ更新
+    if(r.cB>0.5 && accOk){
+      S.northOffset=(S.northOffset==null)?cand:emaAngle(S.northOffset,cand,EMA_OFF);
+    }else if(S.northOffset==null){
+      S.northOffset=cand;                    // 初期フォールバック
+    }
+  }else if(e.absolute===true && !S.sawCompass){
+    S.northOffset=0; S.azSource='絶対方位';   // Android等の絶対方位
   }
+
+  // --- 方位角 = relAzCam + offset（天頂近くは不定なので保持）---
+  if(S.northOffset!=null && r.camMag>0.15){
+    const target=norm360(r.relAzCam + S.northOffset);
+    const tx=Math.cos(target*D2R), ty=Math.sin(target*D2R);
+    S.emaAzX=(S.emaAzX==null)?tx:S.emaAzX+EMA_AZ*(tx-S.emaAzX);
+    S.emaAzY=(S.emaAzY==null)?ty:S.emaAzY+EMA_AZ*(ty-S.emaAzY);
+    S.azimuth=norm360(Math.atan2(S.emaAzY,S.emaAzX)*R2D);
+  }
+
   if(S.measuring){
-    // 最大仰角ラッチ
     if(S.elevation>S.maxEl){ S.maxEl=S.elevation; S.maxAz=S.azimuth; S.maxTime=new Date(); }
-    // 時系列サンプル（方位が取れている時のみ 3D に使える）
     const now=Date.now();
     if(now-S.lastSampleT>=SAMPLE_MS && S.azimuth!=null && S.samples.length<SAMPLE_CAP){
       S.lastSampleT=now;
@@ -409,6 +427,7 @@ function buildRecord(){
     compassAccuracy_deg:S.compassAcc!=null?+S.compassAcc.toFixed(1):null,
     timestamp:(S.maxTime||new Date()).toISOString(),
     sampleStart:S.sampleStart, sampleEnd:S.lastSampleT||S.sampleStart,
+    trackDuration:(S.lastSampleT&&S.sampleStart)?+((S.lastSampleT-S.sampleStart)/1000).toFixed(2):0,
     samples:S.samples.slice(),
   };
 }
