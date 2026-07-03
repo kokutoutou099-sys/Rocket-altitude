@@ -270,9 +270,7 @@ function computeAngles(alphaDeg, betaDeg, gammaDeg){
   const N_cam=-(sA*sG - cA*cG*sB);
   const relAzCam=norm360(Math.atan2(E_cam, N_cam)*R2D);
   const camMag=Math.hypot(E_cam, N_cam);    // 小さいほど天頂近く=方位が不定
-  const E_top=-cB*sA, N_top=cA*cB;          // 端末上端(+Y)の水平成分（フラット時に安定）
-  const relAzTop=norm360(Math.atan2(E_top, N_top)*R2D);
-  return {elevation, relAzCam, relAzTop, camMag, cB};
+  return {elevation, relAzCam, camMag, cB};
 }
 
 /* ---------- 端末の向き（方位反転の根治：安定時のみ北合わせを取り込み凍結）---------- */
@@ -290,13 +288,12 @@ function onOrientation(e){
   const accOk=(S.compassAcc==null)||(S.compassAcc>=0 && S.compassAcc<30);
   if(compass!=null){
     S.sawCompass=true; S.azSource='iOSコンパス';
-    // 端末が十分フラット(cosβ>0.5)＝上端が水平でコンパスも安定。ここでは上端基準(relAzTop)で北合わせ
-    // （フラット時はカメラが真下＝relAzCam不定のため使わない）。
+    const cand=norm360(compass - r.relAzCam);
+    // 端末が十分フラット(cosβ>0.5)かつコンパス精度良好な時だけ更新（元の挙動）
     if(r.cB>0.5 && accOk){
-      const cand=norm360(compass - r.relAzTop);
       S.northOffset=(S.northOffset==null)?cand:emaAngle(S.northOffset,cand,EMA_OFF);
     }else if(S.northOffset==null){
-      S.northOffset=norm360(compass - r.relAzCam);   // 初期フォールバック（水平に構えた瞬間＝カメラ有効）
+      S.northOffset=cand;                    // 初期フォールバック
     }
   }else if(e.absolute===true && !S.sawCompass){
     S.northOffset=0; S.azSource='絶対方位';   // Android等の絶対方位
