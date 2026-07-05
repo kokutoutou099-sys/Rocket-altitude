@@ -300,13 +300,9 @@ function onOrientation(e){
   }
 
   // --- 方位角 = relAzCam + offset（天頂近くは不定なので保持）---
+  // 補正はしない：計算サイトが仰角ベースで復元し、方位は外れ値を自動棄却するため、素の値をそのまま記録する
   if(S.northOffset!=null && r.camMag>0.15){
-    let target=norm360(r.relAzCam + S.northOffset);
-    // 反転抑制：仰角を上げた時などに約180°飛んだら折り返しとみなし戻す（追尾中に真の180°転換は起きない）
-    if(S.azimuth!=null){
-      const d=((target - S.azimuth + 540)%360) - 180;   // 符号付き差[-180,180]
-      if(Math.abs(d)>110) target=norm360(target + 180);
-    }
+    const target=norm360(r.relAzCam + S.northOffset);
     const tx=Math.cos(target*D2R), ty=Math.sin(target*D2R);
     S.emaAzX=(S.emaAzX==null)?tx:S.emaAzX+EMA_AZ*(tx-S.emaAzX);
     S.emaAzY=(S.emaAzY==null)?ty:S.emaAzY+EMA_AZ*(ty-S.emaAzY);
